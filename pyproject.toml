@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-channel-contact-finder"
+version = "0.1.0"
+description = "Find YouTube channels matching criteria and extract their contact information."
+requires-python = ">=3.9"
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+yt-finder = "youtube_finder.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["youtube_finder*"]
