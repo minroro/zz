@@ -2,11 +2,48 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, Iterator
+from urllib.parse import urlparse
 
 from googleapiclient.discovery import build
 
 from .models import ChannelInfo
+
+
+_CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+
+
+def parse_channel_url(url_or_id: str) -> tuple[str, str]:
+    """Return ``(kind, value)`` describing how to resolve a YouTube channel reference.
+
+    ``kind`` is one of ``"id"`` (UC... channel ID), ``"handle"`` (``@name``),
+    ``"username"`` (legacy ``/user/name``), or ``"custom"`` (legacy ``/c/name``).
+    Accepts bare IDs/handles too, not just full URLs.
+    """
+    raw = url_or_id.strip()
+    if _CHANNEL_ID_RE.match(raw):
+        return ("id", raw)
+    if raw.startswith("@"):
+        return ("handle", raw[1:])
+
+    parsed = urlparse(raw if "://" in raw else "https://" + raw)
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    if not parts:
+        raise ValueError(f"could not parse channel reference: {url_or_id!r}")
+
+    if parts[0] == "channel" and len(parts) >= 2 and _CHANNEL_ID_RE.match(parts[1]):
+        return ("id", parts[1])
+    if parts[0].startswith("@"):
+        return ("handle", parts[0][1:])
+    if parts[0] == "user" and len(parts) >= 2:
+        return ("username", parts[1])
+    if parts[0] == "c" and len(parts) >= 2:
+        return ("custom", parts[1])
+    if len(parts) == 1:
+        # Fall-back: treat lone path segment as a handle.
+        return ("handle", parts[0])
+    raise ValueError(f"unrecognized YouTube channel URL: {url_or_id!r}")
 
 
 class ChannelSearcher:
@@ -85,6 +122,33 @@ class ChannelSearcher:
             )
         )
         return self.fetch_channels(ids)
+
+    def resolve_channel(self, url_or_id: str) -> ChannelInfo | None:
+        """Resolve a channel URL/handle/ID into a :class:`ChannelInfo` object."""
+        kind, value = parse_channel_url(url_or_id)
+        params: dict[str, str] = {
+            "part": "snippet,statistics,brandingSettings,contentDetails",
+            "maxResults": "1",
+        }
+        if kind == "id":
+            params["id"] = value
+        elif kind == "handle":
+            params["forHandle"] = "@" + value
+        elif kind == "username":
+            params["forUsername"] = value
+        else:
+            # /c/<custom> URLs aren't directly addressable via channels.list,
+            # so fall back to a search-by-name lookup and pick the top hit.
+            for cid in self.search_channel_ids(value, max_results=1):
+                results = self.fetch_channels([cid])
+                return results[0] if results else None
+            return None
+
+        response = self._client.channels().list(**params).execute()
+        items = response.get("items", [])
+        if not items:
+            return None
+        return _parse_channel(items[0])
 
     def recent_video_descriptions(self, channel: ChannelInfo, limit: int = 5) -> list[str]:
         """Return descriptions of the channel's most recent uploads (best-effort)."""
