@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Iterable, Iterator
 from urllib.parse import urlparse
 
+import httplib2
 from googleapiclient.discovery import build
 
 from .models import ChannelInfo
@@ -55,7 +57,18 @@ class ChannelSearcher:
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("YouTube Data API key is required")
-        self._client = build("youtube", "v3", developerKey=api_key, cache_discovery=False)
+        # ``httplib2`` ships its own CA bundle and ignores ``SSL_CERT_FILE``.
+        # Honor the standard env var so corporate / sandbox proxies with custom
+        # roots can be trusted.
+        ca_bundle = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE")
+        http = httplib2.Http(ca_certs=ca_bundle) if ca_bundle else None
+        self._client = build(
+            "youtube",
+            "v3",
+            developerKey=api_key,
+            http=http,
+            cache_discovery=False,
+        )
 
     def search_channel_ids(
         self,
