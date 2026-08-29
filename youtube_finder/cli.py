@@ -32,6 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Natural-language discovery: "find channels like X that are Y".',
         description="Discover channels similar to a seed and matching a natural-language brief.",
     ))
+    _build_naver_parser(sub.add_parser(
+        "naver",
+        help="Search Naver (blog, news, web, cafe, ...) via the Naver Open API.",
+        description="Search Naver through the Open API (requires NAVER_CLIENT_ID/SECRET).",
+    ))
     return parser
 
 
@@ -71,6 +76,22 @@ def _build_discover_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-key", default=None, help="YouTube API key (defaults to YOUTUBE_API_KEY).")
     parser.add_argument("--anthropic-key", default=None,
                         help="Anthropic API key (defaults to ANTHROPIC_API_KEY).")
+
+
+def _build_naver_parser(parser: argparse.ArgumentParser) -> None:
+    from .naver import SEARCH_TYPES
+
+    parser.add_argument("query", help="Search query (Korean or any language).")
+    parser.add_argument("--type", dest="search_type", choices=SEARCH_TYPES, default="webkr",
+                        help="Search vertical (default: webkr = web pages).")
+    parser.add_argument("--max-results", type=int, default=10)
+    parser.add_argument("--sort", choices=["sim", "date"], default=None,
+                        help="sim = relevance (default), date = most recent first.")
+    _add_output_args(parser)
+    parser.add_argument("--client-id", default=None,
+                        help="Naver API client ID (defaults to NAVER_CLIENT_ID).")
+    parser.add_argument("--client-secret", default=None,
+                        help="Naver API client secret (defaults to NAVER_CLIENT_SECRET).")
 
 
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
@@ -249,9 +270,58 @@ def _run_discover(args, *, api_key: str) -> int:
     return 0 if rows else 1
 
 
+def _run_naver(args) -> int:
+    from .naver import NaverSearcher
+
+    client_id = args.client_id or os.environ.get("NAVER_CLIENT_ID")
+    client_secret = args.client_secret or os.environ.get("NAVER_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        print("error: NAVER_CLIENT_ID / NAVER_CLIENT_SECRET missing. "
+              "Set the env vars or pass --client-id/--client-secret.",
+              file=sys.stderr)
+        return 2
+
+    searcher = NaverSearcher(client_id=client_id, client_secret=client_secret)
+    results = searcher.search(
+        args.query,
+        search_type=args.search_type,
+        max_results=args.max_results,
+        sort=args.sort,
+    )
+    rows = [{"title": r.title, "link": r.link, "description": r.description} for r in results]
+
+    stream = _open_output(args.output_file)
+    try:
+        if args.output == "json":
+            json.dump(rows, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        elif args.output == "csv":
+            if rows:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+        else:
+            if not rows:
+                stream.write("No results found.\n")
+            for row in rows:
+                stream.write(f"\n=== {row['title']} ===\n")
+                stream.write(f"  {row['link']}\n")
+                if row["description"]:
+                    stream.write(f"  {row['description']}\n")
+            if rows:
+                stream.write(f"\n{len(rows)} result(s).\n")
+    finally:
+        if args.output_file:
+            stream.close()
+    return 0 if rows else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = _build_parser().parse_args(argv)
+
+    if args.command == "naver":
+        return _run_naver(args)
 
     api_key = args.api_key or os.environ.get("YOUTUBE_API_KEY")
     if not api_key:
